@@ -15,4 +15,13 @@
   <f:entry title="Password or PAT" field="password">
     <f:password field="password"/>
   </f:entry>
+  
+  <f:entry title="Use propagated artifacts" field="propagatedArtifacts" description="If checked, trigerred release will look for current build's artifacts in a remote location">
+    <f:checkbox />
+  </f:entry>
+
+  <f:entry title="Artifact location" field="artifactLocation">
+    <f:textbox field="artifactLocation"/>
+  </f:entry>
+
 </j:jelly>

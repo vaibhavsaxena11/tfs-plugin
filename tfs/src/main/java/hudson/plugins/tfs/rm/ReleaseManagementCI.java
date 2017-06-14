@@ -19,6 +19,9 @@ import java.util.Arrays;
 import java.util.List;
 import org.json.*;
 
+import java.io.*;
+// import java.lang.Runtime;
+
 /**
  * @author Ankit Goyal
  */
@@ -29,10 +32,12 @@ public class ReleaseManagementCI extends Notifier{
     public final String releaseDefinitionName;
     public final String username;
     public final Secret password;
+    public final boolean propagatedArtifacts;
+    public final String artifactLocation;
     
     // Fields in config.jelly must match the parameter names in the "DataBoundConstructor"
     @DataBoundConstructor
-    public ReleaseManagementCI(String collectionUrl, String projectName, String releaseDefinitionName, String username, Secret password)
+    public ReleaseManagementCI(String collectionUrl, String projectName, String releaseDefinitionName, String username, Secret password, boolean propagatedArtifacts, String artifactLocation)
     {
         if (collectionUrl.endsWith("/"))
         {
@@ -48,6 +53,8 @@ public class ReleaseManagementCI extends Notifier{
         this.releaseDefinitionName = releaseDefinitionName;
         this.username = username;
         this.password = password;
+        this.propagatedArtifacts = propagatedArtifacts;
+        this.artifactLocation = artifactLocation;
     }
 
     /*
@@ -67,9 +74,101 @@ public class ReleaseManagementCI extends Notifier{
      * hudson.tasks.BuildStepCompatibilityLayer#perform(hudson.model.AbstractBuild
      * , hudson.Launcher, hudson.model.BuildListener)
      */
+
+    // private String escapeSplChars(String address)
+    // {
+    //     for(int i=0; i<address.length(); i++) {
+    //         if(address.charAt(i) == '\\') {
+    //             String temp = address.substring(0,i) + address.charAt(i) + address.substring(i,address.length());
+    //             address = temp;
+    //         }
+    //     }
+    // }
+
     @Override
     public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException
     {
+
+        if(this.propagatedArtifacts)
+        {
+            // PAT: stgm6llpxvza3qqatraq6naoymcd6wxssvkesn5v3h4c5wq4owzq
+
+            Process process;
+
+            String jobName = build.getProject().getName();
+            int buildId = build.number;
+            // String versionNumber = "1.0.10";
+            String versionNumber = "1.0."+Integer.toString(buildId);
+            // String nuspecFilename = System.getProperty("jenkins.jobName") + "-artifacts.nuspec";
+            String nuspecFilename = jobName + "-artifacts.nuspec";
+            String nuspecContents = "<?xml version=\"1.0\"?>\r\n"+
+            "<package >\n"+
+                "\t<metadata>\n"+
+                    "\t\t<id>"+jobName+"-artifacts</id>\n"+
+                    "\t\t<version>"+versionNumber+"</version>\n"+
+                    "\t\t<authors>t-vasaxe</authors>\n"+
+                    "\t\t<owners>t-vasaxe</owners>\n"+
+                    "\t\t<licenseUrl>http://LICENSE_URL_HERE_OR_DELETE_THIS_LINE</licenseUrl>\n"+
+                    "\t\t<projectUrl>http://PROJECT_URL_HERE_OR_DELETE_THIS_LINE</projectUrl>\n"+
+                    "\t\t<iconUrl>http://ICON_URL_HERE_OR_DELETE_THIS_LINE</iconUrl>\n"+
+                    "\t\t<requireLicenseAcceptance>false</requireLicenseAcceptance>\n"+
+                    "\t\t<description>Package description</description>\n"+
+                    "\t\t<releaseNotes>Summary of changes made in this release of the package.</releaseNotes>\n"+
+                    "\t\t<copyright>Copyright 2017</copyright>\n"+
+                    "\t\t<tags>Tag1 Tag2</tags>\n"+
+                    "\t\t<dependencies>\n"+
+                        "\t\t\t<dependency id=\"SampleDependency\" version=\"1.0\" />\n"+
+                    "\t\t</dependencies>\n"+
+                "\t</metadata>\n"+
+                "\t<files>\n"+
+                    "\t\t<file src=\".\\**\" target=\"\"></file>\n"+
+                "\t</files>\n"+
+            "</package>";
+
+            FileOutputStream os_nuspecCreate = new FileOutputStream(this.artifactLocation+"\\"+nuspecFilename);
+            PrintStream ps_nuspecCreate = new PrintStream(os_nuspecCreate);
+            ps_nuspecCreate.print(nuspecContents);
+            ps_nuspecCreate.close();
+
+            String cmd_nupkgCreate = "cmd /c cd "+this.artifactLocation+" & nuget.exe pack "+nuspecFilename;
+            process = Runtime.getRuntime().exec(cmd_nupkgCreate);
+            process.waitFor();
+            
+            String nupkgLocation = this.artifactLocation+"\\"+jobName+"-artifacts."+versionNumber+".nupkg";
+
+            String feedName = jobName + "-artifacts-feed";
+            // feedName = "Artifacts-feed";
+            // String cmd_pushPkgMgmt = "cmd /c nuget.exe sources Add -Name \""+feedName+"\" -Source \"https://"+this.username+".pkgs.visualstudio.com/_packaging/"+feedName+"/nuget/v3/index.json\" -username "+this.username+" -password "+this.password+" & nuget.exe push -Source \""+feedName+"\" -ApiKey VSTS "+nupkgLocation;
+            String cmd_pushPkgMgmt = "cmd /c nuget.exe sources Add -Name \""+feedName+"\" -Source \"http://localhost:8080/tfs/DefaultCollection/_packaging/"+feedName+"/nuget/v3/index.json\" & nuget.exe push -Source \""+feedName+"\" -ApiKey VSTS "+nupkgLocation;
+            // cmd_pushPkgMgmt = "cmd /c nuget.exe sources Add -Name \"TaskList-artifacts-feed\" -Source \"http://localhost:8080/tfs/DefaultCollection/_packaging/TaskList-artifacts-feed/nuget/v3/index.json\" & nuget.exe push -Source \"TaskList-artifacts-feed\" -ApiKey VSTS C:\\artifacts\\TaskList-artifacts."+versionNumber+".nupkg";
+
+            cmd_pushPkgMgmt = "cmd /c nuget.exe push -Source \""+feedName+"\" -ApiKey VSTS "+nupkgLocation;
+            listener.getLogger().printf(cmd_pushPkgMgmt);
+            process = Runtime.getRuntime().exec(cmd_pushPkgMgmt);
+
+            final int exitValue = process.waitFor();
+            if (exitValue == 0)
+                listener.getLogger().printf("Successfully executed the command: " + cmd_pushPkgMgmt);
+            else {
+                listener.getLogger().printf("Failed to execute the following command: " + cmd_pushPkgMgmt + " due to the following error(s):");
+                try (final BufferedReader b = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
+                    String line;
+                    if ((line = b.readLine()) != null)
+                        listener.getLogger().printf(line);
+                } catch (final IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        // FeedHttpClient feedHttpClient = 
+        //             new FeedHttpClient(
+        //                     this.collectionUrl.toLowerCase().replaceFirst(".visualstudio.com", ".pkgs.visualstudio.com"),
+        //                     this.username,
+        //                     this.password);
+
+        // feedHttpClient.   
+
         String jobName = build.getProject().getName();
         int buildId = build.number;
         String buildNumber = build.getDisplayName();
@@ -107,12 +206,16 @@ public class ReleaseManagementCI extends Notifier{
             catch (ReleaseManagementException ex)
             {
                 ex.printStackTrace(listener.error("Failed to trigger release.%n"));
+                // ex.printStackTrace(listener.error(" "+this.propagatedArtifacts));
             }
             catch (JSONException ex)
             {
                 ex.printStackTrace(listener.error("Failed to trigger release.%n"));
             }
         }
+
+        
+        
         
         return true;
     }
